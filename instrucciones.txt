@@ -1,0 +1,24 @@
+lui $t0, 0x1001             
+lw $t1, 0($t0)              
+lw $t2, 4($t0)              
+lw $t3, 8($t0)              
+add  $t4, $t1, $t2          
+sub  $t5, $t3, $t1          
+addi $t6, $t4, 5            
+and  $t7, $t4, $t5          
+or   $t8, $t1, $t2          
+sll  $t9, $t1, 2            
+xor  $s0, $t2, $t3          
+nor  $s2, $t4, $t5          
+sw $t4, 12($t0)             
+addi $s1, $zero, 3          
+
+bucle:
+beq $s1, $zero, fin_bucle   
+addi $s1, $s1, -1           
+j bucle                     
+
+fin_bucle:
+j fin_programa          
+    
+fin_programa:

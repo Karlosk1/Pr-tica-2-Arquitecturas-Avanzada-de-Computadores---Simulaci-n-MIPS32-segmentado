@@ -1,0 +1,4 @@
+dato: .word 10, 20, 30, 40 
+
+m1: .asciiz "Instrucciones"
+m2: .asciiz "Fin de instrucciones"
