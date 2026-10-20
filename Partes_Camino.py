@@ -102,6 +102,23 @@ class Segmentacion:
     pass
 
 
+class ForwardingUnit:
+    def get_forward_alu(self, id_ex_rs, id_ex_rt, ex_mem_rd, mem_wb_rd, ex_mem_inst, mem_wb_inst):
+        forward_a = 0
+        forward_b = 0
+        inst_escritura = ["add", "sub", "and", "or", "xor", "nor", "slt", "sll", "addi", "lw", "lui"]
+
+        if ex_mem_inst in inst_escritura and ex_mem_rd not in [None, "$zero"]:
+            if ex_mem_rd == id_ex_rs: forward_a = 2
+            if ex_mem_rd == id_ex_rt: forward_b = 2
+
+        if mem_wb_inst in inst_escritura and mem_wb_rd not in [None, "$zero"]:
+            if mem_wb_rd == id_ex_rs and forward_a != 2: forward_a = 1
+            if mem_wb_rd == id_ex_rt and forward_b != 2: forward_b = 1
+
+        return forward_a, forward_b
+
+
 class IFID:
     def __init__(self):
         self.instruccion = None
@@ -111,26 +128,37 @@ class IFID:
 class IDEX:
     def __init__(self):
         self.tipo_Inst = None
-        self.reg_Dst_Add = None
-        self.registro1_Name = None
-        self.registro2_Name = None
-        self.registro1_Val = None
-        self.registro2_Val = None
+        self.rd = None
+        #borrar nombres
+        self.rs = None
+        self.rt = None
+        self.val_rs = None
+        self.val_rt = None
+        #Meter pc
+        self.pc = None
         self.offset = None
 
 
 class EXMEM:
     def __init__(self):
         self.tipo_Inst = None
-        self.reg_Dst_Add = None
-        self.registro1_Name = None
-        self.registro2_Name = None
-        self.registro2_Val = None
+        self.rd = None
+        #borrar nombres
+        self.rs = None
+        self.rt = None
+        self.val_rt = None
         self.ALU_Valor = None
+        self.pc = None
 
 
 class MEMWB:
     def __init__(self):
         self.tipo_Inst = None
         self.valor_WB = None
-        self.reg_Dst_Add = None
+        self.rd = None
+        self.pc = None
+
+
+
+
+        #QUE ES LA SEGMENTACION? SOLO SE PUEDE MAX 8 FASES DE SEGMENTACION, la mayoria en mem y ex

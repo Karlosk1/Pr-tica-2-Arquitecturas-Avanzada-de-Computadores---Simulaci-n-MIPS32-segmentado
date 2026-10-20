@@ -73,10 +73,14 @@ class Parseador:
                 opcode = partes[0]
 
                 if opcode in ['j', 'jal', 'beq', 'bne']:
+                    # NO SE PUEDE HACER ASI HAY QUE CALCULR LA DIRECCION CUANDO TOCA AQUI SOLO SE PUED COGER EL NUMERO DE SALTOS QUE HACE
                     ultima_parte = partes[-1]
                     if ultima_parte in self.mem_inst.tabla_simbolos:
                         direccion_real = self.mem_inst.tabla_simbolos[ultima_parte]
-                        partes[-1] = str(direccion_real)
+
+                        # Calcula la cantidad de instrucciones a saltar desde PC+4
+                        numero_saltos = (direccion_real - (pc + 4)) // 4
+                        partes[-1] = str(numero_saltos)
                         linea = ' '.join(partes)
                 self.mem_inst.memoria[pc] = linea
 
@@ -119,39 +123,39 @@ class Parseador:
 
 class CPU:
     def __init__(self):
+        # CPU inicializa up y uc y llama al parseador para meterle los archivos
         self.UP = UP()
         self.UC = UC(self.UP)
         self.parseador = Parseador(self.UP.mem_inst, self.UP.mem_data)
 
+    # inicializa memorias y pc
     def cargar_archivos(self, archivo_instrucciones, archivo_datos):
         self.parseador.cargar_memoria_instrucciones(archivo_instrucciones)
         self.parseador.cargar_memoria_datos(archivo_datos)
         self.UP.banco_registros.registros["pc"] = 0x00400000
 
+    # bucle de programa
     def simulate(self):
         ciclo = 0
         fin = False
 
-        print("Iniciando simulación Procesador Segmentado...")
+        print("Iniciando camino segmentado")
 
         while not fin:
             ciclo += 1
 
-            # 1. EJECUCION DEL PIPELINE
+            # cada ciclo se hace esto. se ejecuta al reves y con ex antes que mem asique se guarda la salida en una variable y luego se recupera
             self.fase_wb()
             ex_aux = self.fase_ex()
             self.fase_mem()
 
             self.UC.ex_mem = ex_aux
-
-            # ID devuelve True si necesita inyectar una burbuja
+            # se mete un stall para las burbujas
             stall = self.fase_id()
 
-            # Si hay burbuja, IF no se ejecuta
             if not stall:
                 self.fase_if()
 
-            # 2. IMPRESION DEL ESTADO
             print(f"--- Ciclo {ciclo} ---")
             print(f"IF/ID  : {self.UC.if_id.instruccion}")
             print(f"ID/EX  : {self.UC.id_ex.tipo_Inst}")
@@ -160,53 +164,64 @@ class CPU:
             print(f"PC     : {hex(self.UP.banco_registros.registros['pc'])}")
             print("-" * 25)
 
-            # 3. CONDICION DE PARADA
+            # Si ninguna fase tiene instruccion es que ha terminado
             if (self.UC.if_id.instruccion in [None, "nop"] and
                     self.UC.id_ex.tipo_Inst in [None, "nop"] and
                     self.UC.ex_mem.tipo_Inst in [None, "nop"] and
                     self.UC.mem_wb.tipo_Inst in [None, "nop"]):
-                print(f"Simulación terminada correctamente en el ciclo {ciclo}.")
+                print(f"Simulación terminada en el ciclo {ciclo}.")
                 fin = True
 
     def imprimir_estado_memoria(self):
         etiquetas_inversas = {}
+        # Coge el diccionario de direccion-etiqueta para invertirlo
         for nombre, direccion in self.UP.mem_inst.tabla_simbolos.items():
             etiquetas_inversas[direccion] = nombre
-
+        # hace un formateo de prints
         print("=" * 74)
         print(f"{'Dirección':<14} | {'Etiqueta':<16} | Instrucción")
         print("-" * 74)
 
+        # Se ordena por valor de las direcciones
         direcciones_ordenadas = sorted(self.UP.mem_inst.memoria.keys())
 
         for pc in direcciones_ordenadas:
             inst_str = self.UP.mem_inst.memoria[pc]
             etiqueta = etiquetas_inversas.get(pc, "")
+            # imprime el pc en hex
             pc_formateado = f"0x{pc:08x}"
             print(f"{pc_formateado:<14} | {etiqueta:<16} | {inst_str}")
 
         print("=" * 74)
 
+    # las distintas fases van propcionando a los registros de acoplamiento su info
     def fase_if(self):
+        # No puede sacar el pc de los registros. No ha llegado a registrar nada aun
         pc_actual = self.UP.banco_registros.registros["pc"]
+        # Esto si, lee la instruccion, guarda la inst y el pc en el registro de acoplamiento
         nueva_instruccion = self.UP.mem_inst.leer_instruccion(pc_actual)
 
         self.UC.if_id.instruccion = nueva_instruccion
         self.UC.if_id.PC = pc_actual
 
+        # Suma 4 para la siguiente instruccion
         self.UP.banco_registros.registros["pc"] += 4
 
     def fase_id(self):
+        stall = False
         instruccion_str = self.UC.if_id.instruccion
 
+        # Si el string esta vacio o tiene una burbuja se lo pasa al siguiente registor y se para
         if instruccion_str is None or instruccion_str == "nop":
             self.UC.id_ex.tipo_Inst = "nop"
             return False
 
+        # Splitea por coma o espacio y coge el opcode
         partes = re.split(r'[,\s]+', instruccion_str)
         opcode = partes[0]
         rs, rt, rd, imm = None, None, None, None
 
+        # Dependiendo de el codigo de operacion se hace una cosa u otra
         if opcode in ['add', 'sub', 'and', 'or', 'xor', 'nor', 'slt']:
             rd = partes[1] if len(partes) > 1 else None
             rs = partes[2] if len(partes) > 2 else None
@@ -216,6 +231,7 @@ class CPU:
             rd = partes[1] if len(partes) > 1 else None
             rs = partes[2] if len(partes) > 2 else None
             imm = partes[3] if len(partes) > 3 else None
+            # Coge el desplazamiento para convertirlo en integer
             if imm:
                 try:
                     imm = int(imm, 0)
@@ -230,13 +246,14 @@ class CPU:
                 try:
                     imm = int(imm, 0)
                 except ValueError:
-                    print(f"-> [ALERTA ID] Etiqueta o inmediato no resuelto: '{imm}'. Convirtiendo a NOP.")
+                    print(f"-> Etiqueta o inmediato no resuelto: '{imm}'. Pasando a NOP.")
                     self.UC.id_ex.tipo_Inst = "nop"
                     return False
 
         elif opcode in ['lw', 'sw']:
             rt = partes[1] if len(partes) > 1 else None
             if len(partes) > 2:
+                # Mirar estal inea!
                 match = re.match(r'(-?\d+)\((.*?)\)', partes[2])
                 if match:
                     imm = int(match[1], 0)
@@ -253,7 +270,7 @@ class CPU:
                 try:
                     imm = int(imm, 0)
                 except ValueError:
-                    print(f"-> [ALERTA ID] Etiqueta no resuelta: '{imm}'. Ignorando salto.")
+                    print(f"-> Etiqueta no resuelta: '{imm}'. Ignorando salto, pasando instruccion a NOP.")
                     self.UC.id_ex.tipo_Inst = "nop"
                     return False
 
@@ -270,9 +287,16 @@ class CPU:
             offset = imm
 
         elif opcode == "j":
-            self.UP.banco_registros.registros["pc"] = imm
-            self.UC.id_ex.tipo_Inst = "nop"
-            return False
+            regBase1 = None
+            regBase2 = None
+            regDst = None
+            offset = imm
+
+        elif opcode in ["beq", "bne"]:
+            regBase1 = rs
+            regBase2 = rt
+            regDst = None
+            offset = imm
 
         else:
             regBase1 = rs
@@ -280,61 +304,32 @@ class CPU:
             regDst = rt
             offset = imm
 
+        # Ahora sí extendemos el signo a todos, porque el salto tiene un número relativo que puede ser negativo
         offset_procesado = self.extender_signo(offset)
 
-        # UNIDAD DE DETECCION DE RIESGOS - BURBUJAS
-        stall = False
+        # Si hay un load word y en la siguiente se usa el mismo registro
+        # tiene que haber una burbuja y hace que la instruccion se quede en ifid y mete nada para la siguiente idex
         if self.UC.ex_mem.tipo_Inst == "lw":
-            if self.UC.ex_mem.reg_Dst_Add in [regBase1, regBase2] and self.UC.ex_mem.reg_Dst_Add not in [None, "$zero"]:
+            # mirar linea!
+            if self.UC.ex_mem.rd in [regBase1, regBase2] and self.UC.ex_mem.rd not in [None, "$zero"]:
                 stall = True
 
+        # Asigna un 0 a registros si no esta y si no mete lo que haya en esa direccion de registro
         val_reg1 = self.UP.banco_registros.registros[regBase1] if regBase1 else 0
         val_reg2 = self.UP.banco_registros.registros[regBase2] if regBase2 else 0
 
-        instrucciones_escritura = ["add", "sub", "and", "or", "xor", "nor", "slt", "sll", "addi", "lw", "lui"]
-
-        # CORTOCIRCUITOS EXCLUSIVOS PARA RESOLVER SALTOS EN ID
-        if opcode in ["beq", "bne"]:
-            # Corto desde EX/MEM
-            if self.UC.ex_mem.tipo_Inst in instrucciones_escritura:
-                if self.UC.ex_mem.reg_Dst_Add in [regBase1, regBase2] and self.UC.ex_mem.reg_Dst_Add not in [None,
-                                                                                                             "$zero"]:
-                    if self.UC.ex_mem.tipo_Inst == "lw":
-                        stall = True
-                    else:
-                        if self.UC.ex_mem.reg_Dst_Add == regBase1: val_reg1 = self.UC.ex_mem.ALU_Valor
-                        if self.UC.ex_mem.reg_Dst_Add == regBase2: val_reg2 = self.UC.ex_mem.ALU_Valor
-
-            # Corto desde MEM/WB
-            if self.UC.mem_wb.tipo_Inst in instrucciones_escritura:
-                if self.UC.mem_wb.reg_Dst_Add in [regBase1, regBase2] and self.UC.mem_wb.reg_Dst_Add not in [None,
-                                                                                                             "$zero"]:
-                    if self.UC.mem_wb.reg_Dst_Add == regBase1: val_reg1 = self.UC.mem_wb.valor_WB
-                    if self.UC.mem_wb.reg_Dst_Add == regBase2: val_reg2 = self.UC.mem_wb.valor_WB
-
         if stall:
-            print(f"-> [BURBUJA] Riesgo Load-Use detectado. Inyectando NOP.")
+            print(f"-> Burbuja en lw. Pasando instruccion a NOP.")
             self.UC.id_ex.tipo_Inst = "nop"
             return True
 
-        # Ejecucion de saltos tras aplicar los cortos
-        if opcode == "beq":
-            if val_reg1 == val_reg2:
-                self.UP.banco_registros.registros["pc"] = imm
-                self.UC.id_ex.tipo_Inst = "nop"
-                return False
-        elif opcode == "bne":
-            if val_reg1 != val_reg2:
-                self.UP.banco_registros.registros["pc"] = imm
-                self.UC.id_ex.tipo_Inst = "nop"
-                return False
-
         self.UC.id_ex.tipo_Inst = opcode
-        self.UC.id_ex.registro1_Name = regBase1
-        self.UC.id_ex.registro2_Name = regBase2
-        self.UC.id_ex.registro1_Val = val_reg1
-        self.UC.id_ex.registro2_Val = val_reg2
-        self.UC.id_ex.reg_Dst_Add = regDst
+        self.UC.id_ex.pc = self.UC.if_id.PC
+        self.UC.id_ex.rs = regBase1
+        self.UC.id_ex.rt = regBase2
+        self.UC.id_ex.val_rs = val_reg1
+        self.UC.id_ex.val_rt = val_reg2
+        self.UC.id_ex.rd = regDst
         self.UC.id_ex.offset = offset_procesado
 
         return False
@@ -345,6 +340,7 @@ class CPU:
 
         valor_16bits = offset_original & 0xFFFF
 
+        # Si es un valor negativo pero ns si de offset puede haber valores negativos?
         if valor_16bits & 0x8000:
             return valor_16bits - 0x10000
 
@@ -358,34 +354,38 @@ class CPU:
             return ex_aux
 
         ex_aux.tipo_Inst = self.UC.id_ex.tipo_Inst
-        ex_aux.reg_Dst_Add = self.UC.id_ex.reg_Dst_Add
-        ex_aux.registro1_Name = self.UC.id_ex.registro1_Name
-        ex_aux.registro2_Name = self.UC.id_ex.registro2_Name
+        ex_aux.pc = self.UC.id_ex.pc
+        ex_aux.rd = self.UC.id_ex.rd
+        ex_aux.rs = self.UC.id_ex.rs
+        ex_aux.rt = self.UC.id_ex.rt
 
-        val_reg1 = self.UC.id_ex.registro1_Val
-        val_reg2 = self.UC.id_ex.registro2_Val
+        # Cortos, hay dos tipos, exmem y memwb
+        # Corto desde MEM/WB
+        # Corto desde EXMEM.Que hace?
+        # Si no hay burbuja se para directamente el valor de la alu al valor de los registros
+        # Aqui no puede haber lw
+        fwd_a, fwd_b = self.UC.fw_unit.get_forward_alu(
+            self.UC.id_ex.rs, self.UC.id_ex.rt,
+            self.UC.ex_mem.rd, self.UC.mem_wb.rd,
+            self.UC.ex_mem.tipo_Inst, self.UC.mem_wb.tipo_Inst
+        )
 
-        rs = self.UC.id_ex.registro1_Name
-        rt = self.UC.id_ex.registro2_Name
-        instrucciones_escritura = ["add", "sub", "and", "or", "xor", "nor", "slt", "sll", "addi", "lw", "lui"]
+        if fwd_a == 2:
+            val_reg1 = self.UC.ex_mem.ALU_Valor
+        elif fwd_a == 1:
+            val_reg1 = self.UC.mem_wb.valor_WB
+        else:
+            val_reg1 = self.UC.id_ex.val_rs
 
-        # UNIDAD DE CORTOCIRCUITOS EN EX - Forwarding
-        # Prioridad 2: Rescatar datos de MEM/WB
-        if self.UC.mem_wb.tipo_Inst in instrucciones_escritura:
-            if self.UC.mem_wb.reg_Dst_Add == rs and rs not in [None, "$zero"]:
-                val_reg1 = self.UC.mem_wb.valor_WB
-            if self.UC.mem_wb.reg_Dst_Add == rt and rt not in [None, "$zero"]:
-                val_reg2 = self.UC.mem_wb.valor_WB
+        if fwd_b == 2:
+            val_reg2 = self.UC.ex_mem.ALU_Valor
+        elif fwd_b == 1:
+            val_reg2 = self.UC.mem_wb.valor_WB
+        else:
+            val_reg2 = self.UC.id_ex.val_rt
 
-        # Prioridad 1: Rescatar datos de EX/MEM (sobreescribe la prioridad 2 si ambos modifican el mismo registro)
-        if self.UC.ex_mem.tipo_Inst in instrucciones_escritura and self.UC.ex_mem.tipo_Inst != "lw":
-            if self.UC.ex_mem.reg_Dst_Add == rs and rs not in [None, "$zero"]:
-                val_reg1 = self.UC.ex_mem.ALU_Valor
-            if self.UC.ex_mem.reg_Dst_Add == rt and rt not in [None, "$zero"]:
-                val_reg2 = self.UC.ex_mem.ALU_Valor
-
-        # Es obligatorio actualizar registro2_Val para la instruccion SW que usa los datos en la fase MEM
-        ex_aux.registro2_Val = val_reg2
+        # Es obligatorio actualizar registro2_Val para la instruccion sw que usa los datos en la fase MEM
+        ex_aux.val_rt = val_reg2
 
         offset = self.UC.id_ex.offset
         resultado_calculo = 0
@@ -412,6 +412,25 @@ class CPU:
         elif ex_aux.tipo_Inst == "sll":
             resultado_calculo = val_reg1 << offset
 
+        # Lógica de saltos movida a EX calculando desde el PC del salto + 4 (salto relativo clásico de MIPS)
+        elif ex_aux.tipo_Inst == "j":
+            self.UP.banco_registros.registros["pc"] = ex_aux.pc + 4 + (offset * 4)
+            self.UC.if_id.instruccion = "nop"  # Flush IF/ID
+            ex_aux.tipo_Inst = "nop"
+
+        elif ex_aux.tipo_Inst == "beq":
+            # No hay que usar el zero de la alu aqui?
+            if val_reg1 == val_reg2:
+                self.UP.banco_registros.registros["pc"] = ex_aux.pc + 4 + (offset * 4)
+                self.UC.if_id.instruccion = "nop"  # Flush IF/ID
+                ex_aux.tipo_Inst = "nop"
+
+        elif ex_aux.tipo_Inst == "bne":
+            if val_reg1 != val_reg2:
+                self.UP.banco_registros.registros["pc"] = ex_aux.pc + 4 + (offset * 4)
+                self.UC.if_id.instruccion = "nop"  # Flush IF/ID
+                ex_aux.tipo_Inst = "nop"
+
         ex_aux.ALU_Valor = resultado_calculo
         return ex_aux
 
@@ -423,7 +442,8 @@ class CPU:
             return
 
         self.UC.mem_wb.tipo_Inst = operacion
-        self.UC.mem_wb.reg_Dst_Add = self.UC.ex_mem.reg_Dst_Add
+        self.UC.mem_wb.rd = self.UC.ex_mem.rd
+        self.UC.mem_wb.pc = self.UC.ex_mem.pc
 
         if operacion == "lw":
             direccion = self.UC.ex_mem.ALU_Valor
@@ -432,7 +452,7 @@ class CPU:
 
         elif operacion == "sw":
             direccion = self.UC.ex_mem.ALU_Valor
-            dato_a_escribir = self.UC.ex_mem.registro2_Val
+            dato_a_escribir = self.UC.ex_mem.val_rt
             self.UP.mem_data.escribir_dato(direccion, dato_a_escribir, True)
             self.UC.mem_wb.valor_WB = None
 
@@ -448,7 +468,7 @@ class CPU:
         if operacion in ["sw", "j", "beq", "bne"]:
             return
 
-        registro_destino = self.UC.mem_wb.reg_Dst_Add
+        registro_destino = self.UC.mem_wb.rd
         dato_final = self.UC.mem_wb.valor_WB
 
         if registro_destino is not None and registro_destino != "$zero":
@@ -466,8 +486,10 @@ class UP:
 
 class UC:
     def __init__(self, UP):
+        #FORWARDING UNIT
         self.UP = UP
         self.if_id = IFID()
         self.id_ex = IDEX()
         self.ex_mem = EXMEM()
         self.mem_wb = MEMWB()
+        self.fw_unit = ForwardingUnit()
